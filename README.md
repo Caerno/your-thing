@@ -1,9 +1,9 @@
-# Career space
+# Your Thing · Кем быть
 
-An adaptive interest test that runs entirely in the browser. Three instruments feed one joint Bayesian profile, and 923 O*NET occupations are placed in the same space.
+An adaptive career test that runs entirely in the browser. Three questionnaires feed one joint Bayesian profile, and 923 O*NET occupations are placed in the same space. Each occupation opens with tabs: the O*NET description, ESCO occupations from the official crosswalk, and (Russian version) similar occupations from the Russian Ministry of Labour directory.
 
-- English: https://caerno.github.io/career-space/
-- Русская версия: https://caerno.github.io/career-space/ru/
+- English: https://caerno.github.io/your-thing/
+- Русская версия: https://caerno.github.io/your-thing/ru/
 
 ## How it works
 
@@ -17,6 +17,7 @@ An adaptive interest test that runs entirely in the browser. Three instruments f
 - DDO options are mapped onto RIASEC by content and are not calibrated.
 - The Russian wording of the TIPI items is a working translation, not a validated adaptation.
 - Occupation titles are in English in both versions.
+- Ministry of Labour matches are chosen automatically by title within the same ISCO group and can be wrong.
 
 ## Privacy
 
@@ -27,6 +28,8 @@ No backend and no analytics. Answers are kept in the browser's local storage and
 - RIASEC items and raw response data: openpsychometrics.org, collected 2015–2018; items after Liao, Armstrong & Rounds (2008).
 - TIPI: Gosling, Rentfrow & Swann (2003).
 - DDO: E. A. Klimov.
+- ESCO classification, © European Union; crosswalk ESCO → O*NET-SOC 2019 by the O*NET Resource Center.
+- Occupation directory of the Ministry of Labour and Social Protection of the Russian Federation (spravochnik.rosmintrud.ru).
 - This page includes information from the O*NET 30.0 Database by the U.S. Department of Labor, Employment and Training Administration (USDOL/ETA). Used under the CC BY 4.0 license.
 
 ## Contact
