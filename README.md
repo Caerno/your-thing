@@ -1,6 +1,6 @@
 # Your Thing · Кем быть
 
-An adaptive career test that runs entirely in the browser. Three questionnaires feed one joint Bayesian profile, and 923 O*NET occupations are placed in the same space. Each occupation opens with tabs: the O*NET description, ESCO occupations from the official crosswalk, and (Russian version) similar occupations from the Russian Ministry of Labour directory.
+An adaptive career test that runs entirely in the browser. Three questionnaires feed one joint Bayesian profile, and O*NET occupations are placed in the same space. Each occupation opens with tabs: the O*NET description, ESCO occupations from the official crosswalk, and (Russian version) similar occupations from the Russian Ministry of Labour directory.
 
 - English: https://caerno.github.io/your-thing/
 - Русская версия: https://caerno.github.io/your-thing/ru/
