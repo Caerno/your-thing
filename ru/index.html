@@ -91,14 +91,15 @@ h2{font-size:clamp(26px,3vw,40px);line-height:1.05;letter-spacing:-.025em;font-w
 @media (hover:none){.note--keys{display:none}}
 h3.block{font-family:var(--mono);font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);font-weight:400;margin:44px 0 6px}
 .occs{list-style:none;margin:0;padding:0;counter-reset:occ;max-width:900px}
-.occs > li{display:grid;grid-template-columns:3ch 1fr;gap:0 18px;align-items:baseline;padding:4px 0;border-top:1px solid var(--line)}
+.occs > li{display:grid;grid-template-columns:3ch minmax(0,1fr);gap:0 18px;align-items:baseline;padding:4px 0;border-top:1px solid var(--line)}
 .occs__meta{grid-column:2;display:flex;gap:16px;align-items:baseline}
 .occs > li:last-child{border-bottom:1px solid var(--line)}
 @media (hover:hover){.occs > li:hover{background:linear-gradient(90deg,rgba(224,112,58,.07),transparent 60%)}}
 .occs > li::before{counter-increment:occ;content:counter(occ,decimal-leading-zero);font-family:var(--mono);font-size:12.5px;color:var(--accent)}
-.occs__name{appearance:none;background:none;border:0;color:var(--ink);cursor:pointer;text-align:left;font-family:var(--sans);font-size:17px;font-weight:500;letter-spacing:-.01em;padding:9px 0;line-height:1.35}
-.occs__name::after{content:' +';color:var(--accent);font-family:var(--mono);font-weight:400}
-.occs__name[aria-expanded=true]::after{content:' –'}
+.occs__name{appearance:none;background:none;border:0;color:var(--ink);cursor:pointer;text-align:left;font-family:var(--sans);font-size:17px;font-weight:500;letter-spacing:-.01em;padding:9px 0;line-height:1.35;
+  display:block;width:100%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.occs__name::before{content:'+';display:inline-block;width:1.3em;color:var(--accent);font-family:var(--mono);font-weight:400}
+.occs__name[aria-expanded=true]::before{content:'–'}
 @media (hover:hover){.occs__name:hover{color:var(--accent)}}
 .occs__name:focus-visible,.tab:focus-visible,.ext:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .od{grid-column:2;margin:10px 0 6px;max-width:760px}
@@ -144,7 +145,7 @@ footer a:hover{color:var(--ink)}
   .lead{font-size:16px;margin-bottom:10px}
   .bar{grid-template-columns:1fr 5ch;gap:6px 12px}
   .bar__name{grid-column:1 / -1}
-  .occs > li{grid-template-columns:3ch 1fr;gap:0 12px;padding:2px 0}
+  .occs > li{grid-template-columns:3ch minmax(0,1fr);gap:0 12px;padding:2px 0}
   .occs a{font-size:17px}
   .occs__meta{grid-column:2;display:flex;gap:14px}
   .occs__code{margin-left:0}
@@ -161,11 +162,11 @@ footer a:hover{color:var(--ink)}
 @media (max-width:360px){.likert button{font-size:9.5px}.likert button b{font-size:17px}}
 .occs__ru{font-size:17px;font-weight:500;color:var(--ink)}
 .occs__en{font-size:14px;font-weight:400;color:var(--dim);margin-left:10px}
-.occs__note{grid-column:2;display:block;font-family:var(--mono);font-size:12px;font-weight:400;color:var(--dim);margin:-4px 0 6px}
+.occs__note{font-family:var(--mono);font-size:12px;font-weight:400;color:var(--dim);margin:0 0 8px}
 .occs__blocked{margin-top:22px}
 .occs__blocked summary{cursor:pointer;font-family:var(--mono);font-size:13px;color:var(--mid)}
 .occs__blocked[open] summary{margin-bottom:8px}
-.occs__tags{grid-column:2;display:flex;flex-wrap:wrap;gap:5px;margin:-4px 0 8px}
+.occs__tags{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 12px}
 .chip{font-family:var(--mono);font-size:11.5px;font-weight:400;line-height:1.45;padding:1px 7px;border:1px solid var(--line);border-radius:2px;color:var(--dim);letter-spacing:0}
 .chip--yes{color:#7CC896;border-color:rgba(124,200,150,.45)}
 .chip--no{color:#E8746A;border-color:rgba(232,116,106,.5)}
@@ -744,16 +745,18 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
     var li = el('li'), name = el('button', 'occs__name'); name.type = 'button'; name.setAttribute('aria-expanded', 'false');
     var ruName = DATA.ruNames && DATA.ruNames[r.o.code];
     if (ruName) { name.appendChild(el('span', 'occs__ru', ruName)); name.appendChild(el('span', 'occs__en', r.o.title)); } else name.appendChild(el('span', 'occs__ru', r.o.title));
-    li.appendChild(name);   // теги и причина — отдельной строкой под названием, не внутри кнопки (иначе «+» уезжает вниз)
-    if (note) li.appendChild(el('span', 'occs__note', note));
-    if (tags && tags.length) {
-      var tg = el('span', 'occs__tags'); tags.forEach(function (t) { var c = el('span', 'chip' + (t.tone ? ' chip--' + t.tone : ''), t.t); if (t.title) c.title = t.title; tg.appendChild(c); });
-      li.appendChild(tg);
-    }
+    li.appendChild(name);   // строка — только название; всё остальное — в раскрытии
     var box = el('div', 'od'); box.hidden = true;
+    // Сверху раскрытия — причина и теги: рисуются сразу, без подгрузки; ниже — вкладки, они грузятся при первом раскрытии.
+    if (note) box.appendChild(el('p', 'occs__note', note));
+    if (tags && tags.length) {
+      var tg = el('div', 'occs__tags'); tags.forEach(function (t) { var c = el('span', 'chip' + (t.tone ? ' chip--' + t.tone : ''), t.t); if (t.title) c.title = t.title; tg.appendChild(c); });
+      box.appendChild(tg);
+    }
+    var tabs = el('div', 'od__tabs'); box.appendChild(tabs);
     name.addEventListener('click', function () {
       var open = box.hidden; box.hidden = !open; name.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (open && !box.dataset.done) { box.dataset.done = '1'; renderTabs(box, r.o); }
+      if (open && !tabs.dataset.done) { tabs.dataset.done = '1'; renderTabs(tabs, r.o); }
     });
     li.appendChild(box); return li;
   }
