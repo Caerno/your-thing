@@ -333,7 +333,7 @@ var CAREER = (function () {
   var DIPLOMA = { b_med_diploma: 1, b_pedagogy_diploma: 1, b_psychology_diploma: 1, b_law_diploma: 1, b_econ_diploma: 1, b_tech_diploma: 1,
     b_science_diploma: 1, b_academic_degree: 1, b_transport_training: 1, b_arts_training: 1, b_math_level: 1 };
   var LEVELS = ['school', 'college', 'university', 'postgrad'], REQ = { 'колледж': 'college', 'вуз': 'university', 'вуз и больше': 'postgrad' };
-  var NO_DIPLOMA = { 'открытый': 1, 'курсы': 1, 'портфолио': 1, 'отбор': 1 }, CONTEXT = { sex: 1, age: 1, level: 1, direction: 1, horizon: 1 };
+  var NO_DIPLOMA = { 'открытый': 1, 'курсы': 1, 'портфолио': 1, 'отбор': 1 }, CONTEXT = { sex: 1, age: 1, level: 1, area: 1, direction: 1, horizon: 1 };
   var TOPK = 30, EPS = 0.01;
 
   function given(ans, q) { var v = ans[q]; return v != null && v !== 'skip' ? v : null; }
@@ -361,21 +361,28 @@ var CAREER = (function () {
       return { under_18: A['14-17'], '18_20': A['18-24'] * 3 / 7, '21_35': A['18-24'] * 4 / 7 + A['25-34'],
         over_35: 1 - A['14-17'] - A['18-24'] - A['25-34'] };
     }
-    var dv = given(ans, 'direction'), lvd = given(ans, 'level');
-    if (v == null && Q.from_direction && dv != null && (lvd === 'university' || lvd === 'postgrad'))   // вывод из направления образования
-      v = Q.from_direction[dv] || Q.from_direction_default;
+    var dv = given(ans, 'direction'), av = given(ans, 'area'), lvd = given(ans, 'level'), hi = lvd === 'university' || lvd === 'postgrad';
+    if (v == null && q === 'area' && dv != null) v = C.q.direction.area_of[dv];                       // область — из направления
+    if (v == null && Q.from_direction && dv != null && hi) v = Q.from_direction[dv] || Q.from_direction_default;   // диплом — из направления
+    else if (v == null && Q.from_area && av != null && hi && Q.from_area[av]) v = Q.from_area[av];         // … или из области, где однозначно
     if (v != null) { Q.states.forEach(function (st) { out[st] = st === v ? 1 : 0; }); return out; }
     Q.states.forEach(function (st) { out[st] = 0; });
     if (q === 'sex' || q === 'age') {
       for (s = 0; s < C.sexes.length; s++) for (a = 0; a < C.ages.length; a++, k++) out[q === 'sex' ? C.sexes[s] : C.ages[a]] += post[k];
       return out;
     }
-    if (q === 'direction') { // приор зависит от уровня: колледж — выпуск СПО, вуз и выше — выпуск вузов
-      var L = marg(C, ans, post, 'level'), S = marg(C, ans, post, 'sex'), hi = L.university + L.postgrad, co = L.college, tot = hi + co;
+    if (q === 'area') { // доля областей — сумма направлений
+      var Dm = marg(C, ans, post, 'direction'), AO = C.q.direction.area_of;
+      for (var dd in Dm) out[AO[dd]] += Dm[dd];
+      return out;
+    }
+    if (q === 'direction') { // приор зависит от уровня: колледж — выпуск СПО, вуз и выше — выпуск вузов; ответ об области сужает
+      var L = marg(C, ans, post, 'level'), S = marg(C, ans, post, 'sex'), hl = L.university + L.postgrad, co = L.college, tot = hl + co, t2 = 0;
       if (tot <= 0) return out;
       for (i = 0; i < Q.states.length; i++) for (s = 0; s < C.sexes.length; s++) {
-        var sx = C.sexes[s]; out[Q.states[i]] += S[sx] * (co * Q.prior_by_level.college[sx][i] + hi * Q.prior_by_level.university[sx][i]) / tot;
+        var sx = C.sexes[s]; out[Q.states[i]] += S[sx] * (co * Q.prior_by_level.college[sx][i] + hl * Q.prior_by_level.university[sx][i]) / tot;
       }
+      if (av != null) { for (var d2 in out) { if (Q.area_of[d2] !== av) out[d2] = 0; t2 += out[d2]; } if (t2 > 0) for (d2 in out) out[d2] /= t2; }
       return out;
     }
     for (s = 0; s < C.sexes.length; s++) for (a = 0; a < C.ages.length; a++, k++) {
@@ -442,13 +449,22 @@ var CAREER = (function () {
   // Можно ли сейчас задавать вопрос q: направление — только после уровня; деликатное и «с N лет» — только когда возраст известен.
   function eligible(C, ans, q) {
     var Q = C.q[q]; if (q === 'b_age' || ans[q] != null) return false;
-    if (q === 'direction') { var lv = given(ans, 'level'); return lv != null && lv !== 'school'; }
-    if (Q.from_direction && given(ans, 'direction') != null) return false;   // уже известно из направления (или не вуз — тогда «нет» по уровню)
+    var lv = given(ans, 'level'), av = given(ans, 'area');
+    if (q === 'area') return lv != null && lv !== 'school' && ans.direction == null;
+    if (q === 'direction') return av != null && options(C, ans, q).length > 1;   // уточнение — только внутри названной области
+    if (Q.from_direction && given(ans, 'direction') != null) return false;   // уже известно из направления
+    if (Q.from_area && av != null && Q.from_area[av]) return false;           // … или из области
     if (Q.kind === 'context') return true;
     var ag = given(ans, 'age'), lo = ag ? parseInt(ag, 10) : null;
     if (Q.sensitive && (lo == null || lo < 18)) return false;
     if (Q.min_age && Q.min_age > 14 && (lo == null || lo < Q.min_age)) return false;
     return true;
+  }
+  // Какие ответы показывать (индексы состояний): уточнение направления — только внутри названной области.
+  function options(C, ans, q) {
+    var Q = C.q[q], av = given(ans, 'area'), out = [];
+    for (var i = 0; i < Q.states.length; i++) if (q !== 'direction' || av == null || Q.area_of[Q.states[i]] === av) out.push(i);
+    return out;
   }
   // Приближённое обновление апостериора θ ответом y на пункт item (один шаг EP вдоль w) — для оценки ценности пункта.
   function peek(st, item, y) {
@@ -504,7 +520,7 @@ var CAREER = (function () {
     return best;
   }
   return { lik: lik, ncat: ncat, build: build, gain: gain, nextItem: nextItem, maxSd: maxSd, meanSd: meanSd, code: code, distance: distance, rankOcc: rankOcc,
-    demoPost: demoPost, marg: marg, occFactor: occFactor, rankU: rankU, nextQuestion: nextQuestion, eligible: eligible, memoMarg: memoMarg };
+    demoPost: demoPost, marg: marg, occFactor: occFactor, rankU: rankU, nextQuestion: nextQuestion, eligible: eligible, memoMarg: memoMarg, options: options };
 })();
 
 if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (function () {
@@ -591,7 +607,7 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
     q.appendChild(progressRow(nAll() + 1, T.srcLimit[Q.kind] + (Q.src ? ' · ' + Q.src : '')));
     q.appendChild(el('p', 'q__text', Q.text));
     var lk = el('div', 'likert likert--2');
-    Q.states.forEach(function (code, i) { lk.appendChild(btn('', null, Q.labels[i], function () { answerLimit(id, code); })); });
+    CAREER.options(LIM, lans, id).forEach(function (i) { var code = Q.states[i]; lk.appendChild(btn('', null, Q.labels[i], function () { answerLimit(id, code); })); });
     if (Q.skip) lk.appendChild(btn('', null, T.skip, function () { answerLimit(id, 'skip'); }));
     q.appendChild(lk); q.appendChild(actions());
     if (viaKeyboard) { var first = q.querySelector('.likert button'); if (first) first.focus(); }
