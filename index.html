@@ -361,6 +361,9 @@ var CAREER = (function () {
       return { under_18: A['14-17'], '18_20': A['18-24'] * 3 / 7, '21_35': A['18-24'] * 4 / 7 + A['25-34'],
         over_35: 1 - A['14-17'] - A['18-24'] - A['25-34'] };
     }
+    var dv = given(ans, 'direction'), lvd = given(ans, 'level');
+    if (v == null && Q.from_direction && dv != null && (lvd === 'university' || lvd === 'postgrad'))   // вывод из направления образования
+      v = Q.from_direction[dv] || Q.from_direction_default;
     if (v != null) { Q.states.forEach(function (st) { out[st] = st === v ? 1 : 0; }); return out; }
     Q.states.forEach(function (st) { out[st] = 0; });
     if (q === 'sex' || q === 'age') {
@@ -440,6 +443,7 @@ var CAREER = (function () {
   function eligible(C, ans, q) {
     var Q = C.q[q]; if (q === 'b_age' || ans[q] != null) return false;
     if (q === 'direction') { var lv = given(ans, 'level'); return lv != null && lv !== 'school'; }
+    if (Q.from_direction && given(ans, 'direction') != null) return false;   // уже известно из направления (или не вуз — тогда «нет» по уровню)
     if (Q.kind === 'context') return true;
     var ag = given(ans, 'age'), lo = ag ? parseInt(ag, 10) : null;
     if (Q.sensitive && (lo == null || lo < 18)) return false;
@@ -696,7 +700,7 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
     var first = [], need = [], no = [], yes = [], rest = [], seen = {}, b;
     if (r.L >= 0.75) first.push({ t: fmt(T.pathNote, { y: yearsRu(r.L) }), tone: 'path' });
     if (T.entry && T.entry[co.ep]) first.push({ t: T.entry[co.ep] });
-    if (co.reg) first.push({ t: T.law });
+    if (co.reg) first.push({ t: T.law, title: co.regw });
     for (b in co.b) {
       if (b === 'b_age') continue;
       var e = co.b[b], Q = LIM.q[b], a = lans[b], has = a != null && a !== 'skip', lab = null, yrs = 0;
@@ -721,7 +725,7 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
     if (ruName) { name.appendChild(el('span', 'occs__ru', ruName)); name.appendChild(el('span', 'occs__en', r.o.title)); } else name.appendChild(el('span', 'occs__ru', r.o.title));
     if (note) name.appendChild(el('span', 'occs__note', note));
     if (tags && tags.length) {
-      var tg = el('span', 'occs__tags'); tags.forEach(function (t) { tg.appendChild(el('span', 'chip' + (t.tone ? ' chip--' + t.tone : ''), t.t)); });
+      var tg = el('span', 'occs__tags'); tags.forEach(function (t) { var c = el('span', 'chip' + (t.tone ? ' chip--' + t.tone : ''), t.t); if (t.title) c.title = t.title; tg.appendChild(c); });
       name.appendChild(tg);
     }
     var box = el('div', 'od'); box.hidden = true;
