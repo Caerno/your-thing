@@ -159,6 +159,10 @@ footer a:hover{color:var(--ink)}
 @media (max-width:360px){.likert button{font-size:9.5px}.likert button b{font-size:17px}}
 .occs__ru{font-size:17px;font-weight:500;color:var(--ink)}
 .occs__en{font-size:14px;font-weight:400;color:var(--dim);margin-left:10px}
+.occs__note{display:block;font-family:var(--mono);font-size:12px;font-weight:400;color:var(--dim);margin-top:3px}
+.occs__blocked{margin-top:22px}
+.occs__blocked summary{cursor:pointer;font-family:var(--mono);font-size:13px;color:var(--mid)}
+.occs__blocked[open] summary{margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -313,7 +317,182 @@ var CAREER = (function () {
     return occ.map(function (o) { return { o: o, d: distance(st, zOcc(o, stats, st.scales)) }; })
       .sort(function (a, b) { return a.d - b.d; }).slice(0, top);
   }
-  return { lik: lik, ncat: ncat, build: build, gain: gain, nextItem: nextItem, maxSd: maxSd, meanSd: meanSd, code: code, distance: distance, rankOcc: rankOcc };
+
+  // ---- Ограничения: U(o) = «хочу» × «не отталкивает» × «смогу» (разбор — профпространство/13_…) ----
+  // C — data/career/constraints.json; ans — { вопрос: код ответа } ('skip' — спросили, не ответил).
+  // Неотвеченное — априорная вероятность по (пол, возраст); сами пол и возраст — скрытые и уточняются по всем ответам.
+  // Следующий вопрос любого вида — тот, чей ответ ожидаемо сильнее всего меняет верх выдачи.
+  var DIPLOMA = { b_med_diploma: 1, b_pedagogy_diploma: 1, b_psychology_diploma: 1, b_law_diploma: 1, b_econ_diploma: 1, b_tech_diploma: 1,
+    b_science_diploma: 1, b_academic_degree: 1, b_transport_training: 1, b_arts_training: 1, b_math_level: 1 };
+  var LEVELS = ['school', 'college', 'university', 'postgrad'], REQ = { 'колледж': 'college', 'вуз': 'university', 'вуз и больше': 'postgrad' };
+  var NO_DIPLOMA = { 'открытый': 1, 'курсы': 1, 'портфолио': 1, 'отбор': 1 }, CONTEXT = { sex: 1, age: 1, level: 1, direction: 1, horizon: 1 };
+  var TOPK = 30, EPS = 0.01;
+
+  function given(ans, q) { var v = ans[q]; return v != null && v !== 'skip' ? v : null; }
+  // Апостериор по 14 клеткам (пол × возраст): априорная демография × правдоподобия всех ответов с приором.
+  function demoPost(C, ans) {
+    var w = [], s, a, i, q;
+    for (s = 0; s < C.sexes.length; s++) for (a = 0; a < C.ages.length; a++) {
+      var sx = C.sexes[s], ag = C.ages[a], p = C.demo.sex[sx] * C.demo.age[ag];
+      if (given(ans, 'sex') != null && given(ans, 'sex') !== sx) p = 0;
+      if (given(ans, 'age') != null && given(ans, 'age') !== ag) p = 0;
+      for (q in ans) {
+        var Q = C.q[q], v = given(ans, q); if (!Q || !Q.prior || v == null) continue;
+        i = Q.states.indexOf(v); if (i >= 0) p *= Math.max(Q.prior[sx][ag][i], 1e-6);
+      }
+      w.push(p);
+    }
+    var t = 0; for (i = 0; i < w.length; i++) t += w[i];
+    return w.map(function (x) { return t > 0 ? x / t : 1 / w.length; });
+  }
+  // Распределение ответа на вопрос q как { состояние: p } — при данных ответах ans и апостериоре post.
+  function marg(C, ans, post, q) {
+    var Q = C.q[q], out = {}, v = given(ans, q), i, s, a, k = 0;
+    if (q === 'b_age') { // производное от возраста
+      var A = marg(C, ans, post, 'age');
+      return { under_18: A['14-17'], '18_20': A['18-24'] * 3 / 7, '21_35': A['18-24'] * 4 / 7 + A['25-34'],
+        over_35: 1 - A['14-17'] - A['18-24'] - A['25-34'] };
+    }
+    if (v != null) { Q.states.forEach(function (st) { out[st] = st === v ? 1 : 0; }); return out; }
+    Q.states.forEach(function (st) { out[st] = 0; });
+    if (q === 'sex' || q === 'age') {
+      for (s = 0; s < C.sexes.length; s++) for (a = 0; a < C.ages.length; a++, k++) out[q === 'sex' ? C.sexes[s] : C.ages[a]] += post[k];
+      return out;
+    }
+    if (q === 'direction') { // приор зависит от уровня: колледж — выпуск СПО, вуз и выше — выпуск вузов
+      var L = marg(C, ans, post, 'level'), S = marg(C, ans, post, 'sex'), hi = L.university + L.postgrad, co = L.college, tot = hi + co;
+      if (tot <= 0) return out;
+      for (i = 0; i < Q.states.length; i++) for (s = 0; s < C.sexes.length; s++) {
+        var sx = C.sexes[s]; out[Q.states[i]] += S[sx] * (co * Q.prior_by_level.college[sx][i] + hi * Q.prior_by_level.university[sx][i]) / tot;
+      }
+      return out;
+    }
+    for (s = 0; s < C.sexes.length; s++) for (a = 0; a < C.ages.length; a++, k++) {
+      var row = Q.prior[C.sexes[s]][C.ages[a]]; for (i = 0; i < Q.states.length; i++) out[Q.states[i]] += post[k] * row[i];
+    }
+    var lv = given(ans, 'level');
+    if (Q.need_level && lv != null) { // согласовать с ответом об образовании: состояния выше уровня человека — 0
+      var t = 0; for (var st in out) { var need = Q.need_level[st]; if (need && LEVELS.indexOf(need) > LEVELS.indexOf(lv)) out[st] = 0; t += out[st]; }
+      if (t > 0) for (st in out) out[st] /= t;
+    }
+    return out;
+  }
+  function memoMarg(C, ans) { var post = demoPost(C, ans), cache = {}; return function (q) { return cache[q] || (cache[q] = marg(C, ans, post, q)); }; }
+  function E(m, tab) { var s = 0; for (var k in m) s += m[k] * (tab[k] || 0); return s; }
+  // Множитель «не отталкивает» × «смогу» для профессии o (запись C.occ[code]).
+  function occFactor(C, o, M) {
+    var K = C.consts, f = 1, D = 0, other = 0, agePath = 0, b, e, m, k;
+    for (b in o.b) {
+      e = o.b[b]; m = M(b);
+      if (b === 'b_age') { // школьнику «младше 18 закрывает» = «подождать до 18»
+        var minor = m.under_18 || 0, wait = (e.p && e.p.under_18) || 2.5;
+        if (e.cl) for (k = 0; k < e.cl.length; k++) if (e.cl[k] !== 'under_18') f *= 1 - (m[e.cl[k]] || 0);
+        agePath += minor * wait; continue;
+      }
+      if (e.cl) { var pc = 0; for (k = 0; k < e.cl.length; k++) pc += m[e.cl[k]] || 0; f *= 1 - pc; }
+      if (e.lo) { var lo = 0; for (k in m) lo += m[k] * (e.lo[k] ? 1 / e.lo[k] : 1); f *= lo; }
+      if (e.p && b !== 'b_management_experience') { if (DIPLOMA[b] && o.dip) D += E(m, e.p); else if (!DIPLOMA[b]) other += E(m, e.p); }
+    }
+    for (k = 0; k < o.c.length; k++) f *= E(M(o.c[k]), C.cond_factor);
+    var Lv = M('level'), Dr = null, pm = 0;
+    if (o.dirs.length) { Dr = M('direction'); for (k = 0; k < o.dirs.length; k++) pm += Dr[o.dirs[k]] || 0; }
+    if (!o.dip && REQ[o.lvl]) { // зачёт уровня и направления (профессии без барьера-диплома)
+      var need = REQ[o.lvl], ni = LEVELS.indexOf(need);
+      for (k = 0; k < LEVELS.length; k++) {
+        var l = LEVELS[k], p = Lv[l] || 0; if (!p) continue;
+        D += p * (k >= ni ? (o.dirs.length ? (1 - pm) * K.RETRAIN[need] : 0) : K.UPGRADE[l + '->' + need]);
+      }
+    }
+    var Ks = 0;
+    if (NO_DIPLOMA[o.ep]) Ks = Math.max(0, o.T0 - o.kl * o.k * (pm * K.P_SKILL_MATCH + (1 - pm) * K.P_SKILL));
+    var X = 0;
+    if (o.ep === 'лестница') { var mm = M('b_management_experience'); X = o.T0 * E(mm, K.LADDER_MULT); }
+    var Lyr = Math.max(D, Ks) + other + X + agePath, H = M('horizon'), Qh = C.q.horizon, minorP = M('age')['14-17'] || 0, can = 0;
+    for (k = 0; k < Qh.states.length; k++) {
+      var h = Qh.years[k];
+      can += (H[Qh.states[k]] || 0) * ((1 - minorP) * Math.exp(-K.LAMBDA * Math.max(0, Lyr - h)) + minorP * Math.exp(-K.LAMBDA * Math.max(0, Lyr - h - K.MINOR_BONUS)));
+    }
+    return { f: f * can, L: Lyr };
+  }
+  function likeOf(st, o, stats) { var d = distance(st, o._z || (o._z = zOcc(o, stats, st.scales))); return Math.exp(-d * d / 2); }
+  // Полная выдача: [{ o, u, like, f, L }] по убыванию u.
+  function rankU(st, C, occ, stats, ans) {
+    var M = memoMarg(C, ans);
+    return occ.map(function (o) {
+      var co = C.occ[o.code], like = likeOf(st, o, stats), r = co ? occFactor(C, co, M) : { f: 1, L: 0 };
+      return { o: o, u: like * r.f, like: like, f: r.f, L: r.L };
+    }).sort(function (a, b) { return b.u - a.u; });
+  }
+  function topSet(us, codes) {
+    var idx = us.map(function (_, i) { return i; }).sort(function (a, b) { return us[b] - us[a]; }).slice(0, TOPK), s = {};
+    idx.forEach(function (i) { s[codes[i]] = 1; }); return s;
+  }
+  function overlap(a, b) { var n = 0; for (var k in a) if (b[k]) n++; return n / TOPK; }
+  // Можно ли сейчас задавать вопрос q: направление — только после уровня; деликатное и «с N лет» — только когда возраст известен.
+  function eligible(C, ans, q) {
+    var Q = C.q[q]; if (q === 'b_age' || ans[q] != null) return false;
+    if (q === 'direction') { var lv = given(ans, 'level'); return lv != null && lv !== 'school'; }
+    if (Q.kind === 'context') return true;
+    var ag = given(ans, 'age'), lo = ag ? parseInt(ag, 10) : null;
+    if (Q.sensitive && (lo == null || lo < 18)) return false;
+    if (Q.min_age && Q.min_age > 14 && (lo == null || lo < Q.min_age)) return false;
+    return true;
+  }
+  // Приближённое обновление апостериора θ ответом y на пункт item (один шаг EP вдоль w) — для оценки ценности пункта.
+  function peek(st, item, y) {
+    var n = st.model.dims.length, w = wOf(item, n), s = mv(st.S, w), v = dot(w, s), m = dot(w, st.mu), tl = tilted(item, y, m, v), est = {}, j;
+    var gm = (tl.mean - m) / v, gv = (v - tl.v) / (v * v);
+    for (j = 0; j < st.scales.length; j++) {
+      var sd2 = st.S[j][j] - gv * s[j] * s[j]; est[st.model.dims[j]] = { mean: st.mu[j] + gm * s[j], sd: Math.sqrt(Math.max(sd2, 0)) };
+    }
+    return { p: tl.p, st: { est: est, scales: st.scales } };
+  }
+  // Какие профессии (индексы в occ) зависят от вопроса q — для быстрого пересчёта.
+  function byQuestion(C, codes) {
+    if (C._byQ && C._byQn === codes.length) return C._byQ;
+    var idx = {}; codes.forEach(function (c, i) { var o = C.occ[c]; if (!o) return;
+      for (var b in o.b) (idx[b] = idx[b] || []).push(i); o.c.forEach(function (q) { (idx[q] = idx[q] || []).push(i); }); });
+    if (idx.b_age) (idx.age = idx.age || []);
+    C._byQ = idx; C._byQn = codes.length; return idx;
+  }
+  // Следующий вопрос: пункт интересов или ограничение — тот, чей ответ ожидаемо сильнее меняет топ-30. null — менять нечего.
+  function nextQuestion(st, C, occ, stats, ans, opts) {
+    opts = opts || {};
+    var codes = occ.map(function (o) { return o.code; }), M = memoMarg(C, ans), likes = [], fs = [], us = [], i, k;
+    for (i = 0; i < occ.length; i++) {
+      likes.push(likeOf(st, occ[i], stats)); var co = C.occ[codes[i]]; fs.push(co ? occFactor(C, co, M).f : 1); us.push(likes[i] * fs[i]);
+    }
+    var base = topSet(us, codes), best = null, bv = opts.eps != null ? opts.eps : EPS;
+    if (!opts.noItems) for (k = 0; k < st.items.length; k++) {
+      var it = st.items[k]; if (st.asked[it.id]) continue;
+      var val = 0, K = ncat(it);
+      for (var y = 1; y <= K; y++) {
+        var pk = peek(st, it, y); if (pk.p < 1e-3) continue;
+        var u2 = []; for (i = 0; i < occ.length; i++) u2.push(likeOf(pk.st, occ[i], stats) * fs[i]);
+        val += pk.p * (1 - overlap(base, topSet(u2, codes)));
+      }
+      if (val > bv) { bv = val; best = { kind: 'item', item: it, value: val }; }
+    }
+    if (!opts.noLimits) for (var q in C.q) {
+      if (!eligible(C, ans, q)) continue;
+      var mq = M(q), v2 = 0, touched = CONTEXT[q] ? null : byQuestion(C, codes)[q] || [];
+      for (var stt in mq) {
+        var pq = mq[stt]; if (pq < 1e-3) continue;
+        var a2 = {}; for (var x in ans) a2[x] = ans[x]; a2[q] = stt;
+        var M2 = memoMarg(C, a2), u3;
+        if (touched) { // ответ на барьер или условие меняет только профессии, где он есть (сдвиг пола/возраста от него — второго порядка)
+          u3 = us.slice(); for (k = 0; k < touched.length; k++) { i = touched[k]; u3[i] = likes[i] * occFactor(C, C.occ[codes[i]], M2).f; }
+        } else {
+          u3 = []; for (i = 0; i < occ.length; i++) { var co2 = C.occ[codes[i]]; u3.push(likes[i] * (co2 ? occFactor(C, co2, M2).f : 1)); }
+        }
+        v2 += pq * (1 - overlap(base, topSet(u3, codes)));
+      }
+      if (v2 > bv) { bv = v2; best = { kind: 'limit', q: q, value: v2 }; }
+    }
+    return best;
+  }
+  return { lik: lik, ncat: ncat, build: build, gain: gain, nextItem: nextItem, maxSd: maxSd, meanSd: meanSd, code: code, distance: distance, rankOcc: rankOcc,
+    demoPost: demoPost, marg: marg, occFactor: occFactor, rankU: rankU, nextQuestion: nextQuestion, eligible: eligible, memoMarg: memoMarg };
 })();
 
 if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (function () {
@@ -324,10 +503,14 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
   try { answers = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { answers = []; }
   function rebuild() { return CAREER.build(DATA.model, DATA.items, answers); }
   var st = rebuild(), showing = false;
+  // Ограничения (только на /ru/): ответы { вопрос: код }, свой ключ; следующий вопрос — CAREER.nextQuestion (13_ в вольте).
+  var LIM = DATA.limits || null, KEYL = 'career.limits.v1', lans = {}, LIMN = LIM ? Object.keys(LIM.q).length : 0;
+  if (LIM) try { lans = JSON.parse(localStorage.getItem(KEYL) || '{}'); } catch (e) { lans = {}; }
+  function nAll() { return st.n + (LIM ? Object.keys(lans).length : 0); }
 
   function fmt(s, o) { return s.replace(/\{(\w+)\}/g, function (_, k) { return o[k]; }); }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(answers)); } catch (e) {} }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(answers)); if (LIM) localStorage.setItem(KEYL, JSON.stringify(lans)); } catch (e) {} }
   function pct(x) { return Math.max(0, Math.min(100, (x + 3) / 6 * 100)); }
 
   function renderBars() {
@@ -353,6 +536,11 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
     document.body.classList.add('nohover');
     answers.push([item.id, y]); save(); st = rebuild(); renderBars(); if (showing) renderResults(); renderQuestion();
   }
+  function answerLimit(id, code) {
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    document.body.classList.add('nohover');
+    lans[id] = code; save(); if (showing) renderResults(); renderQuestion();
+  }
   document.addEventListener('mousemove', function () { document.body.classList.remove('nohover'); }, { passive: true });
   function btn(cls, num, label, fn) {
     var b = el('button', cls); b.type = 'button';
@@ -368,27 +556,46 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
     if (i < bs.length) { viaKeyboard = true; e.preventDefault(); bs[i].click(); }
   });
 
-  var TOTAL = DATA.items.length, viaKeyboard = false;
+  var TOTAL = DATA.items.length + LIMN, viaKeyboard = false;
   function restart() {
-    if (st.n && !window.confirm(T.confirmRestart)) return;
-    answers = []; save(); st = rebuild(); showing = false; res.hidden = true; renderBars(); renderQuestion();
+    if (nAll() && !window.confirm(T.confirmRestart)) return;
+    answers = []; lans = {}; save(); st = rebuild(); showing = false; res.hidden = true; renderBars(); renderQuestion();
   }
-  function syncAbout() { var a = document.querySelector('.about'); if (a) a.hidden = st.n > 0; }
+  function syncAbout() { var a = document.querySelector('.about'); if (a) a.hidden = nAll() > 0; }
+  function actions() {
+    var act = el('div', 'q__actions');
+    if (nAll() >= MIN_SHOW && !showing) act.appendChild(btn('btn btn--go', null, T.showResults, showResults));
+    if (st.n && CAREER.maxSd(st) < SHARP) act.appendChild(el('span', 'q__hint', T.sharpEnough));
+    if (nAll()) act.appendChild(btn('btn', null, T.restart, restart));
+    return act;
+  }
+  function renderLimit(id) {
+    var Q = LIM.q[id];
+    q.appendChild(el('p', 'q__progress', fmt(T.progress, { n: nAll() + 1, total: TOTAL }) + ' · ' + T.srcLimit[Q.kind]));
+    q.appendChild(el('p', 'q__text', Q.text));
+    var lk = el('div', 'likert likert--2');
+    Q.states.forEach(function (code, i) { lk.appendChild(btn('', null, Q.labels[i], function () { answerLimit(id, code); })); });
+    if (Q.skip) lk.appendChild(btn('', null, T.skip, function () { answerLimit(id, 'skip'); }));
+    q.appendChild(lk); q.appendChild(actions());
+    if (viaKeyboard) { var first = q.querySelector('.likert button'); if (first) first.focus(); }
+  }
   function renderQuestion() {
     syncAbout();
     q.innerHTML = '';
-    var item = CAREER.nextItem(st);
+    var nq = LIM ? CAREER.nextQuestion(st, LIM, DATA.occ, DATA.occStats, lans) : null;
+    if (nq && nq.kind === 'limit') { renderLimit(nq.q); return; }
+    var item = LIM ? (nq ? nq.item : null) : CAREER.nextItem(st);
     if (!item) {
-      q.appendChild(el('p', 'q__progress', fmt(T.progress, { n: st.n, total: TOTAL })));
+      q.appendChild(el('p', 'q__progress', fmt(T.progress, { n: nAll(), total: TOTAL })));
       q.appendChild(el('p', 'q__text', T.done));
       var done = el('div', 'q__actions');
       if (!showing) done.appendChild(btn('btn btn--go', null, T.showResults, showResults));
       done.appendChild(btn('btn', null, T.restart, restart));
       q.appendChild(done);
-      if (st.n && !showing) showResults();
+      if (nAll() && !showing) showResults();
       return;
     }
-    q.appendChild(el('p', 'q__progress', fmt(T.progress, { n: st.n + 1, total: TOTAL }) + ' · ' + T.src[item.src]));
+    q.appendChild(el('p', 'q__progress', fmt(T.progress, { n: nAll() + 1, total: TOTAL }) + ' · ' + T.src[item.src]));
     var lk;
     if (item.kind === 'pair') {
       q.appendChild(el('p', 'q__stem', T.pairStem));
@@ -405,11 +612,7 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
       })(y);
     }
     q.appendChild(lk);
-    var act = el('div', 'q__actions');
-    if (st.n >= MIN_SHOW && !showing) act.appendChild(btn('btn btn--go', null, T.showResults, showResults));
-    if (st.n && CAREER.maxSd(st) < SHARP) act.appendChild(el('span', 'q__hint', T.sharpEnough));
-    if (st.n) act.appendChild(btn('btn', null, T.restart, restart));
-    q.appendChild(act);
+    q.appendChild(actions());
     if (viaKeyboard) { var first = q.querySelector('.likert button'); if (first) first.focus(); }
   }
 
@@ -459,21 +662,56 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
 
   function showResults(noScroll) { showing = true; renderResults(); res.hidden = false; if (noScroll !== true) res.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 
+  // Годы пути словами (страница с ограничениями — русская).
+  function yearsRu(L) {
+    if (L < 1) return T.lessYear;
+    var n = Math.round(L), m10 = n % 10, m100 = n % 100;
+    return '~' + n + ' ' + (m10 === 1 && m100 !== 11 ? 'год' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'года' : 'лет');
+  }
+  // Что закрывает профессию по ответам человека (неустранимое): { q, a } или null.
+  function blockReason(code) {
+    var co = LIM.occ[code]; if (!co) return null;
+    for (var b in co.b) {
+      var e = co.b[b], a = lans[b]; if (b === 'b_age' || !e.cl || !a || a === 'skip' || e.cl.indexOf(a) < 0) continue;
+      var Q = LIM.q[b]; return { q: Q.text, a: Q.labels[Q.states.indexOf(a)] };
+    }
+    return null;
+  }
+  function occItem(r, note) {
+    var li = el('li'), name = el('button', 'occs__name'); name.type = 'button'; name.setAttribute('aria-expanded', 'false');
+    var ruName = DATA.ruNames && DATA.ruNames[r.o.code];
+    if (ruName) { name.appendChild(el('span', 'occs__ru', ruName)); name.appendChild(el('span', 'occs__en', r.o.title)); } else name.appendChild(el('span', 'occs__ru', r.o.title));
+    if (note) name.appendChild(el('span', 'occs__note', note));
+    var box = el('div', 'od'); box.hidden = true;
+    name.addEventListener('click', function () {
+      var open = box.hidden; box.hidden = !open; name.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open && !box.dataset.done) { box.dataset.done = '1'; renderTabs(box, r.o); }
+    });
+    li.appendChild(name); li.appendChild(box); return li;
+  }
   function renderResults() {
     var ol = document.getElementById('career-occs'); ol.innerHTML = '';
-    CAREER.rankOcc(st, DATA.occ, DATA.occStats, 30).forEach(function (r) {
-      var li = el('li'), name = el('button', 'occs__name'); name.type = 'button'; name.setAttribute('aria-expanded', 'false');
-      var ruName = DATA.ruNames && DATA.ruNames[r.o.code];
-      if (ruName) { name.appendChild(el('span', 'occs__ru', ruName)); name.appendChild(el('span', 'occs__en', r.o.title)); } else name.appendChild(el('span', 'occs__ru', r.o.title));
-      var box = el('div', 'od'); box.hidden = true;
-      name.addEventListener('click', function () {
-        var open = box.hidden; box.hidden = !open; name.setAttribute('aria-expanded', open ? 'true' : 'false');
-        if (open && !box.dataset.done) { box.dataset.done = '1'; renderTabs(box, r.o); }
+    if (!LIM) CAREER.rankOcc(st, DATA.occ, DATA.occStats, 30).forEach(function (r) { ol.appendChild(occItem(r)); });
+    else {
+      // Главный список — по U (реранк, не фильтр); закрытое неустранимым — в свёрнутый блок с причиной.
+      var ranked = CAREER.rankU(st, LIM, DATA.occ, DATA.occStats, lans), shown = 0;
+      ranked.forEach(function (r) {
+        if (shown >= 30 || blockReason(r.o.code)) return; shown++;
+        var co = LIM.occ[r.o.code], notes = [];
+        if (r.L >= 0.75) notes.push(fmt(T.pathNote, { y: yearsRu(r.L) }));
+        var against = co ? co.c.filter(function (c) { return lans[c] === 'no'; }).map(function (c) { return LIM.q[c].short; }) : [];
+        if (against.length) notes.push(fmt(T.against, { list: against.join(', ') }));
+        ol.appendChild(occItem(r, notes.join(' · ')));
       });
-      li.appendChild(name); li.appendChild(box); ol.appendChild(li);
-    });
+      var bl = document.getElementById('career-blocked');
+      if (!bl) { bl = el('details', 'occs__blocked'); bl.id = 'career-blocked'; ol.parentNode.insertBefore(bl, ol.nextSibling); }
+      bl.innerHTML = ''; var byLike = ranked.slice().sort(function (a, b) { return b.like - a.like; }).slice(0, 60), list = el('ol', 'occs'), nb = 0;
+      byLike.forEach(function (r) { var why = blockReason(r.o.code); if (!why || nb >= 15) return; nb++; list.appendChild(occItem(r, fmt(T.blockedReason, why))); });
+      bl.hidden = !nb; bl.appendChild(el('summary', null, fmt(T.blockedTitle, { n: nb }))); bl.appendChild(list);
+    }
     var ta = document.getElementById('career-json'), out = { n: st.n, theta: {}, sd: {} };
     DATA.model.dims.forEach(function (s) { out.theta[s] = +st.est[s].mean.toFixed(3); out.sd[s] = +st.est[s].sd.toFixed(3); });
+    if (LIM) out.limits = lans;
     ta.value = JSON.stringify(out);
   }
   document.getElementById('career-copy').addEventListener('click', function () {
