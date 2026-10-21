@@ -584,7 +584,7 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
   }
   function renderLimit(id) {
     var Q = LIM.q[id];
-    q.appendChild(progressRow(nAll() + 1, T.srcLimit[Q.kind]));
+    q.appendChild(progressRow(nAll() + 1, T.srcLimit[Q.kind] + (Q.src ? ' · ' + Q.src : '')));
     q.appendChild(el('p', 'q__text', Q.text));
     var lk = el('div', 'likert likert--2');
     Q.states.forEach(function (code, i) { lk.appendChild(btn('', null, Q.labels[i], function () { answerLimit(id, code); })); });
@@ -690,6 +690,31 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
     }
     return null;
   }
+  // Теги карточки, не больше 6: путь, как входят, «закон»; требования — что нужно получить (с годами), что уже есть (зелёный),
+  // что проверяют; условия профессии — красный «нет», зелёный «да», обычный — середина или не спрошено.
+  function cardTags(co, r) {
+    var first = [], need = [], no = [], yes = [], rest = [], seen = {}, b;
+    if (r.L >= 0.75) first.push({ t: fmt(T.pathNote, { y: yearsRu(r.L) }), tone: 'path' });
+    if (T.entry && T.entry[co.ep]) first.push({ t: T.entry[co.ep] });
+    if (co.reg) first.push({ t: T.law });
+    for (b in co.b) {
+      if (b === 'b_age') continue;
+      var e = co.b[b], Q = LIM.q[b], a = lans[b], has = a != null && a !== 'skip', lab = null, yrs = 0;
+      if (e.p && Q.tag) {
+        var cand = Q.states.filter(function (x) { return !(x in e.p) && !(e.cl && e.cl.indexOf(x) >= 0) && Q.tag[x]; });
+        if (!cand.length) cand = Object.keys(e.p).filter(function (x) { return Q.tag[x]; }).sort(function (x, y) { return e.p[x] - e.p[y]; });
+        if (cand.length) lab = Q.tag[cand[0]];
+        if (has) yrs = e.p[a] || 0;
+      } else if (e.cl && Q.tagc) lab = Q.tagc;
+      if (!lab || seen[lab]) continue; seen[lab] = 1;
+      if (has && yrs > 0) need.push({ t: lab + ' · ' + yearsRu(yrs) }); else if (has) yes.push({ t: lab, tone: 'yes' }); else rest.push({ t: lab });
+    }
+    co.c.forEach(function (c) {
+      var a = lans[c], t = { t: LIM.q[c].short };
+      if (a === 'no') { t.tone = 'no'; no.push(t); } else if (a === 'yes') { t.tone = 'yes'; yes.push(t); } else { if (a === 'some') t.tone = 'some'; rest.push(t); }
+    });
+    return first.concat(need, no, yes, rest).slice(0, 6);
+  }
   function occItem(r, note, tags) {
     var li = el('li'), name = el('button', 'occs__name'); name.type = 'button'; name.setAttribute('aria-expanded', 'false');
     var ruName = DATA.ruNames && DATA.ruNames[r.o.code];
@@ -714,11 +739,8 @@ if (typeof document !== 'undefined' && typeof CAREER_DATA !== 'undefined') (func
       var ranked = CAREER.rankU(st, LIM, DATA.occ, DATA.occStats, lans), shown = 0;
       ranked.forEach(function (r) {
         if (shown >= 30 || blockReason(r.o.code)) return; shown++;
-        // Теги: путь (если заметный) и условия профессии тоном ответа — зелёный «да», красный «нет», обычный — середина или не спрошено.
-        var co = LIM.occ[r.o.code], tags = [];
-        if (r.L >= 0.75) tags.push({ t: fmt(T.pathNote, { y: yearsRu(r.L) }), tone: 'path' });
-        if (co) co.c.forEach(function (c) { var a = lans[c]; tags.push({ t: LIM.q[c].short, tone: a === 'yes' ? 'yes' : a === 'no' ? 'no' : a === 'some' ? 'some' : '' }); });
-        ol.appendChild(occItem(r, null, tags));
+        var co = LIM.occ[r.o.code];
+        ol.appendChild(occItem(r, null, co ? cardTags(co, r) : []));
       });
       var bl = document.getElementById('career-blocked');
       if (!bl) { bl = el('details', 'occs__blocked'); bl.id = 'career-blocked'; ol.parentNode.insertBefore(bl, ol.nextSibling); }
